@@ -1,7 +1,11 @@
 <RCC>
     <qresource prefix="/contour">
+        <file>bell.wav</file>
         <file>contour.yml</file>
         <file>shell-integration.zsh</file>
-        <file alias="logo.png">res/images/contour-logo-256.png</file>
+        <file>ui/RequestPermission.qml</file>
+        <file>ui/Terminal.qml</file>
+        <file>ui/main.qml</file>
+        <file alias="logo-256.png">res/images/contour-logo-256.png</file>
     </qresource>
 </RCC>

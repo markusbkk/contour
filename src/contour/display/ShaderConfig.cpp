@@ -115,7 +115,9 @@ std::unique_ptr<QOpenGLShaderProgram> createShader(ShaderConfig const& _shaderCo
     DisplayLog()("Loading vertex shader: {}", vertexLocation);
     if (!shader->addShaderFromSourceCode(QOpenGLShader::Vertex, vertexSource.c_str()))
     {
-        errorlog()("Compiling vertex shader {} failed. {}", vertexLocation, shader->log().toStdString());
+        errorlog()("Compiling vertex shader {} failed.", vertexLocation);
+        errorlog()("Shader source: {}", vertexSource);
+        errorlog()("Shader log: {}", shader->log().toStdString());
         qDebug() << shader->log();
         return {};
     }

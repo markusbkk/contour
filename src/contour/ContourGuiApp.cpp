@@ -13,7 +13,6 @@
  */
 #include <contour/Config.h>
 #include <contour/ContourGuiApp.h>
-#include <contour/TerminalWindow.h>
 #include <contour/display/TerminalWidget.h>
 
 #include <terminal/Process.h>
@@ -24,8 +23,10 @@
 #include <crispy/utils.h>
 
 #include <QtCore/QProcess>
+#include <QtGui/QGuiApplication>
 #include <QtGui/QSurfaceFormat>
-#include <QtWidgets/QApplication>
+#include <QtQml/QQmlApplicationEngine>
+#include <QtQml/QQmlContext>
 
 #include <iostream>
 #include <vector>
@@ -53,10 +54,6 @@ ContourGuiApp::ContourGuiApp(): _sessionManager(*this)
 {
     link("contour.terminal", bind(&ContourGuiApp::terminalGuiAction, this));
     link("contour.font-locator", bind(&ContourGuiApp::fontConfigAction, this));
-}
-
-ContourGuiApp::~ContourGuiApp()
-{
 }
 
 int ContourGuiApp::run(int argc, char const* argv[])
@@ -185,6 +182,21 @@ void ContourGuiApp::onExit(TerminalSession& _session)
         return;
 
     _exitStatus = localProcess->checkStatus();
+}
+
+QUrl ContourGuiApp::resolveResource(std::string_view path) const
+{
+    auto const localPath = config::configHome() / FileSystem::path(path.data());
+    if (FileSystem::exists(localPath))
+        return QUrl::fromLocalFile(QString::fromStdString(localPath.generic_string()));
+
+#if !defined(NDEBUG) && defined(CONTOUR_GUI_SOURCE_DIR)
+    auto const devPath = FileSystem::path(CONTOUR_GUI_SOURCE_DIR) / FileSystem::path(path.data());
+    if (FileSystem::exists(devPath))
+        return QUrl::fromLocalFile(QString::fromStdString(devPath.generic_string()));
+#endif
+
+    return QUrl("qrc:/contour/" + QString::fromLatin1(path.data(), static_cast<int>(path.size())));
 }
 
 bool ContourGuiApp::loadConfig(string const& target)
@@ -338,26 +350,30 @@ int ContourGuiApp::terminalGuiAction()
 #endif
 
     auto qtArgsCount = static_cast<int>(qtArgsPtr.size());
-    QApplication app(qtArgsCount, (char**) qtArgsPtr.data());
+    QGuiApplication app(qtArgsCount, (char**) qtArgsPtr.data());
+
+    app.setWindowIcon(QIcon(":/contour/logo-256.png"));
 
     QSurfaceFormat::setDefaultFormat(display::createSurfaceFormat());
 
     ensureTermInfoFile();
+
+    qmlRegisterType<display::TerminalWidget>("Contour.Terminal", 1, 0, "ContourTerminal");
+    qmlRegisterUncreatableType<TerminalSession>("Contour.Terminal", 1, 0, "TerminalSession", "Use factory.");
+    qRegisterMetaType<TerminalSession*>("TerminalSession*");
+    qmlEngine_ = make_unique<QQmlApplicationEngine>();
+
+    QQmlContext* context = qmlEngine_->rootContext();
+    context->setContextProperty("terminalSessions", &_sessionManager);
 
     // auto const HTS = "\033H";
     // auto const TBC = "\033[g";
     // printf("\r%s        %s                        %s\r", TBC, HTS, HTS);
 
     // Spawn initial window.
-    if (!newWindow())
-    {
-        errorlog()("Could not spawn terminal window.");
-        return EXIT_FAILURE;
-    }
+    newWindow();
 
     auto rv = app.exec();
-
-    _terminalWindows.clear();
 
     if (_exitStatus.has_value())
     {
@@ -366,6 +382,9 @@ int ContourGuiApp::terminalGuiAction()
         else if (holds_alternative<Process::SignalExit>(*_exitStatus))
             rv = EXIT_FAILURE;
     }
+
+    // Explicitly destroy QML engine here to ensure it's being destructed before QGuiApplication.
+    qmlEngine_.reset();
 
     // printf("\r%s", TBC);
     return rv;
@@ -386,32 +405,9 @@ void ContourGuiApp::ensureTermInfoFile()
         FileSystem::copy_file(sandboxTerminfoFile, hostTerminfoBaseDirectory / "contour");
 }
 
-TerminalWindow* ContourGuiApp::newWindow(contour::config::Config const& config)
+void ContourGuiApp::newWindow()
 {
-    auto const* profile = _config.profile(profileName());
-    if (!profile)
-        return nullptr;
-    _config = config;
-    auto mainWindow = new TerminalWindow(*this);
-
-    mainWindow->show();
-
-    _terminalWindows.emplace_back(mainWindow);
-    // TODO: Remove window from list when destroyed.
-
-    // QObject::connect(mainWindow, &TerminalWindow::showNotification,
-    //                  this, &ContourGuiApp::showNotification);
-
-    return _terminalWindows.back();
-}
-
-TerminalWindow* ContourGuiApp::newWindow()
-{
-    auto mainWindow = new TerminalWindow(*this);
-    mainWindow->show();
-
-    _terminalWindows.emplace_back(mainWindow);
-    return _terminalWindows.back();
+    qmlEngine_->load(resolveResource("ui/main.qml"));
 }
 
 void ContourGuiApp::showNotification(std::string_view _title, std::string_view _content)

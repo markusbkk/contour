@@ -22,6 +22,9 @@
 
 #include <crispy/point.h>
 
+#include <fmt/format.h>
+
+#include <QtCore/QAbstractItemModel>
 #include <QtCore/QFileSystemWatcher>
 
 #include <functional>
@@ -38,6 +41,21 @@ namespace display
 class ContourGuiApp;
 
 /**
+ * A set of user-facing activities that are guarded behind a permission-check wall.
+ */
+enum class GuardedRole
+{
+    ChangeFont,
+    CaptureBuffer,
+};
+
+/**
+ * Trivial cache to remember the interactive choice when the user has to be asked
+ * and the user decided to permenently decide for the current session.
+ */
+using PermissionCache = std::map<GuardedRole, bool>;
+
+/**
  * Manages a single terminal session (Client, Terminal, Display)
  *
  * This class is designed to be working in:
@@ -45,11 +63,45 @@ class ContourGuiApp;
  * - text based displays (think of TMUX client)
  * - headless-mode (think of TMUX server)
  */
-class TerminalSession: public QObject, public terminal::Terminal::Events
+class TerminalSession: public QAbstractItemModel, public terminal::Terminal::Events
 {
     Q_OBJECT
+    Q_PROPERTY(int id READ id)
+    Q_PROPERTY(int pageLineCount READ pageLineCount NOTIFY lineCountChanged)
+    Q_PROPERTY(int historyLineCount READ historyLineCount NOTIFY historyLineCountChanged)
+    Q_PROPERTY(int scrollOffset READ scrollOffset WRITE setScrollOffset NOTIFY scrollOffsetChanged)
+    Q_PROPERTY(QString title READ title WRITE setTitle NOTIFY titleChanged)
+    // Q_PROPERTY(QString profileName READ profileName NOTIFY profileNameChanged)
 
   public:
+    // {{{ Model property helper
+    QString title() const { return QString::fromStdString(terminal().windowTitle()); }
+    void setTitle(QString const& value) { terminal().setWindowTitle(value.toStdString()); }
+
+    int pageLineCount() const noexcept { return unbox<int>(terminal_.pageSize().lines); }
+    int historyLineCount() const noexcept { return unbox<int>(terminal_.currentScreen().historyLineCount()); }
+
+    int scrollOffset() const noexcept { return unbox<int>(terminal().viewport().scrollOffset()); }
+    void setScrollOffset(int value)
+    {
+        terminal().viewport().scrollTo(terminal::ScrollOffset::cast_from(value));
+    }
+
+    void onScrollOffsetChanged(terminal::ScrollOffset value) override
+    {
+        emit scrollOffsetChanged(unbox<int>(value));
+    }
+    // }}}
+
+    // {{{ QAbstractItemModel overrides
+    QModelIndex index(int row, int column, const QModelIndex& parent = QModelIndex()) const override;
+    QModelIndex parent(const QModelIndex& child) const override;
+    int rowCount(const QModelIndex& parent = QModelIndex()) const override;
+    int columnCount(const QModelIndex& parent = QModelIndex()) const override;
+    QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
+    bool setData(const QModelIndex& index, const QVariant& value, int role = Qt::EditRole) override;
+    // }}}
+
     /**
      * Constructs a single terminal session.
      *
@@ -58,6 +110,8 @@ class TerminalSession: public QObject, public terminal::Terminal::Events
      */
     TerminalSession(std::unique_ptr<terminal::Pty> _pty, ContourGuiApp& _app);
     ~TerminalSession() override;
+
+    int id() const noexcept { return id_; }
 
     /// Starts the VT background thread.
     void start();
@@ -80,6 +134,9 @@ class TerminalSession: public QObject, public terminal::Terminal::Events
     display::TerminalWidget const* display() const noexcept { return display_; }
 
     void attachDisplay(display::TerminalWidget& display);
+
+    Q_INVOKABLE void applyPendingFontChange(bool answer, bool remember);
+    Q_INVOKABLE void executePendingBufferCapture(bool answer, bool remember);
 
     // Terminal::Events
     //
@@ -187,12 +244,25 @@ class TerminalSession: public QObject, public terminal::Terminal::Events
         return uptimeSecs;
     }
 
+    void requestPermission(config::Permission _allowedByConfig, GuardedRole role);
+    void executeRole(GuardedRole role, bool allow, bool remember);
+
   signals:
     void sessionClosed(TerminalSession&);
+    void profileNameChanged(QString newValue);
+    void lineCountChanged(int newValue);
+    void historyLineCountChanged(int newValue);
+    void scrollOffsetChanged(int newValue);
+    void titleChanged(QString const& value);
+    void onBell();
+    void requestPermissionForFontChange();
+    void requestPermissionForBufferCapture();
+    void showNotification(QString const& title, QString const& content);
 
   public slots:
     void onConfigReload();
     void onHighlightUpdate();
+    void configureDisplay();
 
   private:
     // helpers
@@ -204,18 +274,17 @@ class TerminalSession: public QObject, public terminal::Terminal::Events
     bool reloadConfigWithProfile(std::string const& _profileName);
     bool resetConfig();
     void followHyperlink(terminal::HyperlinkInfo const& _hyperlink);
-    bool requestPermission(config::Permission _allowedByConfig, std::string_view _topicText);
     void setFontSize(text::font_size _size);
     void setDefaultCursor();
     void configureTerminal();
     void configureCursor(config::CursorConfig const& cursorConfig);
-    void configureDisplay();
     uint8_t matchModeFlags() const;
     void flushInput();
     void mainLoop();
 
     // private data
     //
+    int id_;
     std::chrono::steady_clock::time_point startTime_;
     config::Config config_;
     std::string profileName_;
@@ -240,6 +309,45 @@ class TerminalSession: public QObject, public terminal::Terminal::Events
     bool allowKeyMappings_ = true;
     Audio audio;
     std::vector<int> musicalNotesBuffer_;
+
+    terminal::LineCount lastHistoryLineCount_;
+
+    struct CaptureBufferRequest
+    {
+        terminal::LineCount lines;
+        bool logical;
+    };
+    std::optional<CaptureBufferRequest> pendingBufferCapture_;
+    std::optional<terminal::FontDef> pendingFontChange_;
+    PermissionCache rememberedPermissions_;
 };
 
 } // namespace contour
+
+Q_DECLARE_INTERFACE(contour::TerminalSession, "org.contour.TerminalSession")
+
+namespace fmt
+{
+
+template <>
+struct formatter<contour::GuardedRole>
+{
+    template <typename ParseContext>
+    constexpr auto parse(ParseContext& ctx)
+    {
+        return ctx.begin();
+    }
+
+    template <typename FormatContext>
+    auto format(contour::GuardedRole value, FormatContext& ctx)
+    {
+        switch (value)
+        {
+            case contour::GuardedRole::ChangeFont: return fmt::format_to(ctx.out(), "Change Font");
+            case contour::GuardedRole::CaptureBuffer: return fmt::format_to(ctx.out(), "Capture Buffer");
+        }
+        crispy::unreachable();
+    }
+};
+
+} // namespace fmt

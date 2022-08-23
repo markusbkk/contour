@@ -5,6 +5,7 @@ sudo apt install -y \
             libqt5core5a \
             libqt5gui5 \
             libqt5network5 \
+            libqt5qml5 \
             \
             xvfb \
             \

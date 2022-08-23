@@ -290,6 +290,7 @@ struct Config
 };
 
 FileSystem::path configHome(std::string const& _programName);
+FileSystem::path configHome();
 
 std::optional<std::string> readConfigFile(std::string const& _filename);
 

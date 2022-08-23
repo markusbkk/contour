@@ -15,9 +15,9 @@ if(NOT(WIN32) AND NOT(APPLE) AND NOT(CONTOUR_BUILD_WITH_QT6))
 endif()
 
 if(CONTOUR_BUILD_WITH_QT6)
-    find_package(Qt6 COMPONENTS Core Gui Network OpenGL OpenGLWidgets Widgets Multimedia ${QtX11Extras} REQUIRED)
+    find_package(Qt6 COMPONENTS Core Gui Qml Quick QuickControls2 Network OpenGL OpenGLWidgets Widgets Multimedia ${QtX11Extras} REQUIRED)
 else()
-    find_package(Qt5 COMPONENTS Gui Network Widgets Multimedia ${QtX11Extras} REQUIRED)  # apt install qtbase5-dev libqt5gui5
+    find_package(Qt5 COMPONENTS Gui Qml Quick QuickControls2 Network Widgets Multimedia ${QtX11Extras} REQUIRED)  # apt install qtbase5-dev libqt5gui5
 endif()
 
 add_subdirectory(display)
@@ -30,15 +30,14 @@ set(contour_SRCS
 if(CONTOUR_FRONTEND_GUI)
     list(APPEND contour_SRCS
         Actions.cpp Actions.h
+        Audio.cpp Audio.h
         BlurBehind.cpp BlurBehind.h
         Config.cpp Config.h
         ContourApp.cpp ContourApp.h
         ContourGuiApp.cpp ContourGuiApp.h
-        ScrollableDisplay.cpp ScrollableDisplay.h
         TerminalSession.cpp TerminalSession.h
         TerminalSessionManager.cpp TerminalSessionManager.h
-        TerminalWindow.cpp TerminalWindow.h
-        helper.cpp helper.h Audio.cpp Audio.h
+        helper.cpp helper.h
     )
 endif()
 
@@ -54,6 +53,10 @@ endif()
 
 add_executable(contour ${contour_SRCS} ${QT_RESOURCES})
 target_include_directories(contour PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+# target_compile_definitions(contour PRIVATE $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:QT_QML_DEBUG>)
+target_compile_definitions(contour PRIVATE $<$<CONFIG:Debug>:QT_QML_DEBUG>)
+target_compile_definitions(contour PRIVATE $<$<CONFIG:Debug>:QMLJSDEBUGGER>)
+target_compile_definitions(contour PRIVATE $<$<CONFIG:Debug>:QT_DECLARATIVE_DEBUG>)
 target_compile_definitions(contour PRIVATE
     CONTOUR_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
     CONTOUR_VERSION_MINOR=${PROJECT_VERSION_MINOR}
@@ -82,6 +85,10 @@ endif()
 
 if(CONTOUR_SCROLLBAR)
     target_compile_definitions(contour PRIVATE CONTOUR_SCROLLBAR)
+endif()
+
+if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
+    target_compile_definitions(contour PRIVATE CONTOUR_GUI_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
 if(WIN32)
@@ -121,13 +128,13 @@ endif()
 
 if(CONTOUR_FRONTEND_GUI)
     if(CONTOUR_BUILD_WITH_QT6)
-        target_link_libraries(contour ContourTerminalDisplay terminal_renderer Qt6::Core Qt6::Network Qt6::OpenGL Qt6::OpenGLWidgets Qt6::Widgets Qt6::Multimedia)
+        target_link_libraries(contour ContourTerminalDisplay terminal_renderer Qt6::Core Qt6::Network Qt6::OpenGL Qt6::Multimedia)
         if(NOT(WIN32) AND NOT(APPLE))
             target_link_libraries(contour xcb)
         endif()
     else()
-        target_link_libraries(contour crispy::core ContourTerminalDisplay terminal_renderer Qt5::Gui Qt5::Network Qt5::Widgets Qt5::Multimedia)
-        if(NOT(WIN32) AND NOT(APPLE) AND NOT(CONTOUR_BUILD_WITH_QT6))
+        target_link_libraries(contour ContourTerminalDisplay terminal_renderer Qt5::Gui Qt5::Network Qt5::Multimedia)
+        if(NOT(WIN32) AND NOT(APPLE))
             target_link_libraries(contour Qt5::X11Extras xcb)
         endif()
     endif()

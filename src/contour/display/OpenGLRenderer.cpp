@@ -28,6 +28,12 @@
 #include <QtCore/QtGlobal>
 #include <QtGui/QImage>
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    #include <QtOpenGL/QOpenGLPixelTransferOptions>
+#else
+    #include <QtGui/QOpenGLPixelTransferOptions>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -58,6 +64,13 @@ namespace atlas = terminal::renderer::atlas;
 
 namespace contour::display
 {
+
+namespace ZAxisDepths
+{
+    constexpr GLfloat BackgroundImage = 0.0f;
+    constexpr GLfloat BackgroundSGR = 0.0f;
+    constexpr GLfloat Text = 0.0f;
+} // namespace ZAxisDepths
 
 namespace
 {
@@ -112,17 +125,6 @@ namespace
         auto err = GLenum {};
         while ((err = glGetError()) != GL_NO_ERROR)
             DisplayLog(location)("OpenGL error {} for call.", err);
-    }
-
-    GLenum glFormat(atlas::Format _format)
-    {
-        switch (_format)
-        {
-            case atlas::Format::RGBA: return GL_RGBA;
-            case atlas::Format::RGB: return GL_RGB;
-            case atlas::Format::Red: return GL_RED;
-        }
-        return GL_RED;
     }
 
     QMatrix4x4 ortho(float left, float right, float bottom, float top)
@@ -192,16 +194,13 @@ namespace
 OpenGLRenderer::OpenGLRenderer(ShaderConfig const& textShaderConfig,
                                ShaderConfig const& rectShaderConfig,
                                ShaderConfig const& backgroundImageShaderConfig,
+                               ImageSize viewSize,
                                ImageSize targetSurfaceSize,
                                ImageSize /*textureTileSize*/,
                                terminal::renderer::PageMargin margin):
     _startTime { chrono::steady_clock::now().time_since_epoch() },
     _now { _startTime },
-    _renderTargetSize { targetSurfaceSize },
-    _projectionMatrix { ortho(0.0f,
-                              unbox<float>(targetSurfaceSize.width),  // left, right
-                              unbox<float>(targetSurfaceSize.height), // bottom, top
-                              0.0f) },
+    _viewSize { viewSize },
     _margin { margin },
     _textShader { createShader(textShaderConfig) },
     _textProjectionLocation { _textShader->uniformLocation("vs_projection") },
@@ -211,26 +210,9 @@ OpenGLRenderer::OpenGLRenderer(ShaderConfig const& textShaderConfig,
     _rectProjectionLocation { _rectShader->uniformLocation("u_projection") },
     _rectTimeLocation { _rectShader->uniformLocation("u_time") }
 {
-    initialize();
-
+    DisplayLog()("OpenGLRenderer: Constructing with render size {}.", _renderTargetSize);
+    initializeOpenGLFunctions();
     setRenderSize(targetSurfaceSize);
-
-    assert(_textProjectionLocation != -1);
-
-    CHECKED_GL(glEnable(GL_BLEND));
-    CHECKED_GL(glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE));
-    // glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
-    //  //glBlendFunc(GL_SRC1_COLOR, GL_ONE_MINUS_SRC1_COLOR);
-
-    bound(*_textShader, [&]() {
-        CHECKED_GL(_textShader->setUniformValue("fs_textureAtlas", 0)); // GL_TEXTURE0?
-        auto const textureAtlasWidth = unbox<GLfloat>(_textureAtlas.textureSize.width);
-        CHECKED_GL(_textShader->setUniformValue("pixel_x", 1.0f / textureAtlasWidth));
-    });
-
-    initializeBackgroundRendering();
-    initializeRectRendering();
-    initializeTextureRendering();
 }
 
 void OpenGLRenderer::setRenderSize(ImageSize targetSurfaceSize)
@@ -238,13 +220,26 @@ void OpenGLRenderer::setRenderSize(ImageSize targetSurfaceSize)
     if (_renderTargetSize == targetSurfaceSize)
         return;
 
-    // glOrtho
+    // TODO(pr): also have a facility to update _viewSize.
+
     _renderTargetSize = targetSurfaceSize;
+    _projectionMatrix = ortho(/* left */ 0.0f,
+                              /* right */ unbox<float>(_renderTargetSize.width),
+                              /* bottom */ unbox<float>(_renderTargetSize.height),
+                              /* top */ 0.0f);
+
     DisplayLog()("Setting render target size to {}.", _renderTargetSize);
-    _projectionMatrix = ortho(0.0f,
-                              unbox<float>(_renderTargetSize.width),  // left, right
-                              unbox<float>(_renderTargetSize.height), // bottom, top
-                              0.0f);
+}
+
+void OpenGLRenderer::setTranslation(float x, float y, float z) noexcept
+{
+    _viewMatrix.setToIdentity();
+    _viewMatrix.translate(x, y, z);
+}
+
+void OpenGLRenderer::setModelMatrix(QMatrix4x4 matrix) noexcept
+{
+    _modelMatrix = matrix;
 }
 
 void OpenGLRenderer::setMargin(terminal::renderer::PageMargin margin) noexcept
@@ -277,6 +272,8 @@ void OpenGLRenderer::initializeRectRendering()
     // 1 (vec4): color buffer
     CHECKED_GL(glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, BufferStride, ColorOffset));
     CHECKED_GL(glEnableVertexAttribArray(1));
+
+    CHECKED_GL(glBindVertexArray(0));
 }
 
 void OpenGLRenderer::initializeTextureRendering()
@@ -312,6 +309,8 @@ void OpenGLRenderer::initializeTextureRendering()
     // glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
 
     // glVertexAttribDivisor(0, 1); // TODO: later for instanced rendering
+
+    CHECKED_GL(glBindVertexArray(0));
 }
 
 OpenGLRenderer::~OpenGLRenderer()
@@ -326,11 +325,26 @@ OpenGLRenderer::~OpenGLRenderer()
 
 void OpenGLRenderer::initialize()
 {
-    if (!_initialized)
-    {
-        _initialized = true;
-        initializeOpenGLFunctions();
-    }
+    if (_initialized)
+        return;
+
+    _initialized = true;
+
+    DisplayLog()("OpenGLRenderer: Initializing.");
+
+    setRenderSize(_renderTargetSize);
+
+    assert(_textProjectionLocation != -1);
+
+    bound(*_textShader, [&]() {
+        CHECKED_GL(_textShader->setUniformValue("fs_textureAtlas", 0)); // GL_TEXTURE0?
+        auto const textureAtlasWidth = unbox<GLfloat>(_textureAtlas.textureSize.width);
+        CHECKED_GL(_textShader->setUniformValue("pixel_x", 1.0f / textureAtlasWidth));
+    });
+
+    initializeBackgroundRendering();
+    initializeRectRendering();
+    initializeTextureRendering();
 }
 
 void OpenGLRenderer::clearCache()
@@ -339,8 +353,6 @@ void OpenGLRenderer::clearCache()
 
 int OpenGLRenderer::maxTextureDepth()
 {
-    initialize();
-
     GLint value = {};
     CHECKED_GL(glGetIntegerv(GL_MAX_3D_TEXTURE_SIZE, &value));
     return static_cast<int>(value);
@@ -348,8 +360,6 @@ int OpenGLRenderer::maxTextureDepth()
 
 int OpenGLRenderer::maxTextureSize()
 {
-    initialize();
-
     GLint value = {};
     CHECKED_GL(glGetIntegerv(GL_MAX_TEXTURE_SIZE, &value));
     return static_cast<int>(value);
@@ -368,9 +378,7 @@ void OpenGLRenderer::configureAtlas(atlas::ConfigureAtlas atlas)
     _textureAtlas.textureSize = atlas.size;
     _textureAtlas.properties = atlas.properties;
 
-    // clang-format off
     DisplayLog()("configureAtlas: {} {}", atlas.size, atlas.properties.format);
-    // clang-format on
 }
 
 void OpenGLRenderer::uploadTile(atlas::UploadTile tile)
@@ -399,7 +407,7 @@ void OpenGLRenderer::renderTile(atlas::RenderTile tile)
     // atlas texture Vertices to locate the tile
     auto const x = static_cast<GLfloat>(tile.x.value);
     auto const y = static_cast<GLfloat>(tile.y.value);
-    auto const z = static_cast<GLfloat>(0);
+    auto const z = ZAxisDepths::Text;
 
     // tile bitmap size on target render surface
     GLfloat const r = unbox<GLfloat>(firstNonZero(tile.targetSize.width, tile.bitmapSize.width));
@@ -467,29 +475,72 @@ ImageSize OpenGLRenderer::renderBufferSize()
 #endif
 }
 
+struct ScopedRenderEnvironment
+{
+    QOpenGLExtraFunctions& gl;
+
+    bool savedBlend;          // QML seems to explicitly disable that, but we need it.
+    GLenum savedDepthFunc {}; // Shuold be GL_LESS, but you never know.
+    GLuint savedVAO {};       // QML sets that before and uses it later, so we need to back it up, too.
+    GLenum savedBlendSource {};
+    GLenum savedBlendDestination {};
+
+    ScopedRenderEnvironment(QOpenGLExtraFunctions& _gl):
+        gl { _gl }, // clang-format off
+        savedBlend { gl.glIsEnabled(GL_BLEND) != GL_FALSE } // clang-format on
+    {
+        gl.glGetIntegerv(GL_VERTEX_ARRAY_BINDING, (GLint*) &savedVAO);
+
+        gl.glGetIntegerv(GL_DEPTH_FUNC, (GLint*) &savedDepthFunc);
+        gl.glDepthFunc(GL_LEQUAL);
+        gl.glDepthMask(GL_FALSE);
+
+        // Enable color blending to allow drawing text/images on top of background.
+        gl.glGetIntegerv(GL_BLEND_SRC, (GLint*) &savedBlendSource);
+        gl.glGetIntegerv(GL_BLEND_DST, (GLint*) &savedBlendDestination);
+        gl.glEnable(GL_BLEND);
+        // gl.glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA, GL_ONE);
+        gl.glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE);
+    }
+
+    ~ScopedRenderEnvironment()
+    {
+        gl.glBlendFunc(savedBlendSource, savedBlendDestination);
+        gl.glDepthFunc(savedDepthFunc);
+        if (!savedBlend)
+            gl.glDisable(GL_BLEND);
+
+        gl.glBindVertexArray(savedVAO);
+        gl.glDepthMask(GL_TRUE);
+    }
+};
+
 void OpenGLRenderer::execute()
 {
-    _currentTextureId = std::numeric_limits<GLuint>::max();
+    Require(_initialized);
 
-    // FIXME
-    // glEnable(GL_BLEND);
-    // glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE);
-    // glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
-    // glBlendFunc(GL_SRC1_COLOR, GL_ONE_MINUS_SRC1_COLOR);
+    auto const _ = ScopedRenderEnvironment { *this };
 
     auto const timeValue = uptime();
+
+    // DisplayLog()("execute {} rects, {} uploads, {} renders\n",
+    //              _rectBuffer.size() / 7,
+    //              _scheduledExecutions.uploadTiles.size(),
+    //              _scheduledExecutions.renderBatch.renderTiles.size());
 
     if (_backgroundImageTexture)
     {
         bound(*_backgroundShader, [&]() { executeRenderBackground(timeValue); });
     }
 
+    auto const mvp = _projectionMatrix * _viewMatrix * _modelMatrix;
+
     // render filled rects
     //
     if (!_rectBuffer.empty())
     {
         bound(*_rectShader, [&]() {
-            _rectShader->setUniformValue(_rectProjectionLocation, _projectionMatrix);
+            _rectShader->setUniformValue(_rectProjectionLocation, mvp);
             _rectShader->setUniformValue(_rectTimeLocation, timeValue);
 
             glBindVertexArray(_rectVAO);
@@ -505,11 +556,26 @@ void OpenGLRenderer::execute()
         _rectBuffer.clear();
     }
 
+    // potentially (re-)configure atlas
+    //
+    if (_scheduledExecutions.configureAtlas)
+        executeConfigureAtlas(*_scheduledExecutions.configureAtlas);
+
+    // potentially upload any new textures
+    //
+    if (!_scheduledExecutions.uploadTiles.empty())
+    {
+        glBindTexture(GL_TEXTURE_2D, _textureAtlas.textureId);
+        for (auto const& params: _scheduledExecutions.uploadTiles)
+            executeUploadTile(params);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
     // render textures
     //
     bound(*_textShader, [&]() {
         // TODO: only upload when it actually DOES change
-        _textShader->setUniformValue(_textProjectionLocation, _projectionMatrix);
+        _textShader->setUniformValue(_textProjectionLocation, mvp);
         _textShader->setUniformValue(_textTimeLocation, timeValue);
         executeRenderTextures();
     });
@@ -524,32 +590,26 @@ void OpenGLRenderer::execute()
 
 void OpenGLRenderer::executeRenderTextures()
 {
-    // potentially (re-)configure atlas
-    if (_scheduledExecutions.configureAtlas)
-        executeConfigureAtlas(*_scheduledExecutions.configureAtlas);
-
-    // potentially upload any new textures
-    for (auto const& params: _scheduledExecutions.uploadTiles)
-        executeUploadTile(params);
-
     // upload vertices and render
     RenderBatch& batch = _scheduledExecutions.renderBatch;
     if (!batch.renderTiles.empty())
     {
-        glActiveTexture(static_cast<GLenum>(GL_TEXTURE0 + batch.userdata));
-        bindTexture(_textureAtlas.textureId);
+        //_textureAtlas.gpuTexture.bind(batch.userdata /* unit */);
+        glBindTexture(GL_TEXTURE_2D, _textureAtlas.textureId);
+
         glBindVertexArray(_textVAO);
 
         // upload buffer
-        // clang-format off
         glBindBuffer(GL_ARRAY_BUFFER, _textVBO);
         glBufferData(GL_ARRAY_BUFFER,
                      static_cast<GLsizei>(batch.buffer.size() * sizeof(GLfloat)),
-                     batch.buffer.data(), GL_STREAM_DRAW);
-        glDrawArrays(GL_TRIANGLES,
-                     0,
-                     static_cast<GLsizei>(batch.renderTiles.size() * 6));
-        // clang-format on
+                     batch.buffer.data(),
+                     GL_STREAM_DRAW);
+        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(batch.renderTiles.size() * 6));
+
+        glBindVertexArray(0);
+        //_textureAtlas.gpuTexture.release(batch.userdata /* unit */);
+        glBindTexture(GL_TEXTURE_2D, 0);
     }
 
     _scheduledExecutions.clear();
@@ -557,36 +617,47 @@ void OpenGLRenderer::executeRenderTextures()
 
 void OpenGLRenderer::executeConfigureAtlas(atlas::ConfigureAtlas const& param)
 {
-    if (_textureAtlas.textureId)
-        glDeleteTextures(1, &_textureAtlas.textureId);
-
-    CHECKED_GL(glGenTextures(1, &_textureAtlas.textureId));
-    bindTexture(_textureAtlas.textureId);
-
     Require(isPowerOfTwo(unbox<uint32_t>(param.size.width)));
     Require(isPowerOfTwo(unbox<uint32_t>(param.size.height)));
+    Require(param.properties.format == atlas::Format::RGBA);
 
     // Already initialized.
     // _textureAtlas.textureSize = param.size;
     // _textureAtlas.properties = param.properties;
 
-    CHECKED_GL(glTexParameteri(GL_TEXTURE_2D,
-                               GL_TEXTURE_MAG_FILTER,
-                               GL_NEAREST)); // NEAREST, because LINEAR yields borders at the edges
-    CHECKED_GL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST));
-    CHECKED_GL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE));
-    CHECKED_GL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE));
-    CHECKED_GL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE));
+#if 0
+    if (_textureAtlas.gpuTexture.isCreated())
+        _textureAtlas.gpuTexture.destroy();
 
-    // clang-format off
-    DisplayLog()("GL configure atlas: {} {} GL texture Id {}",
-                 param.size, param.properties.format, _textureAtlas.textureId);
-    // clang-format on
+    _textureAtlas.gpuTexture.setMipLevels(0);
+    _textureAtlas.gpuTexture.setAutoMipMapGenerationEnabled(false);
+    _textureAtlas.gpuTexture.setFormat(QOpenGLTexture::TextureFormat::RGBA8_UNorm);
+    _textureAtlas.gpuTexture.setSize(unbox<int>(param.size.width), unbox<int>(param.size.height));
+    _textureAtlas.gpuTexture.setMagnificationFilter(QOpenGLTexture::Filter::Nearest);
+    _textureAtlas.gpuTexture.setMinificationFilter(QOpenGLTexture::Filter::Nearest);
+    _textureAtlas.gpuTexture.setWrapMode(QOpenGLTexture::WrapMode::ClampToEdge);
+    _textureAtlas.gpuTexture.create();
+    Require(_textureAtlas.gpuTexture.isCreated());
 
+    QImage stubData(QSize(unbox<int>(param.size.width), unbox<int>(param.size.height)),
+                    QImage::Format::Format_RGBA8888);
+    stubData.fill(qRgba(0x00, 0xA0, 0x00, 0xC0));
+    _textureAtlas.gpuTexture.setData(stubData);
+#else
+    if (_textureAtlas.textureId)
+        glDeleteTextures(1, &_textureAtlas.textureId);
+    glGenTextures(1, &_textureAtlas.textureId);
+    glBindTexture(GL_TEXTURE_2D, _textureAtlas.textureId);
+    glTexParameteri(GL_TEXTURE_2D,
+                    GL_TEXTURE_MAG_FILTER,
+                    GL_NEAREST); // NEAREST, because LINEAR yields borders at the edges
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     auto constexpr target = GL_TEXTURE_2D;
     auto constexpr levelOfDetail = 0;
     auto constexpr type = GL_UNSIGNED_BYTE;
-
     std::vector<uint8_t> stub;
     // {{{ fill stub
     stub.resize(param.size.area() * element_count(param.properties.format));
@@ -616,8 +687,7 @@ void OpenGLRenderer::executeConfigureAtlas(atlas::ConfigureAtlas const& param)
             break;
     }
     // }}}
-
-    GLenum const glFmt = glFormat(param.properties.format);
+    GLenum const glFmt = GL_RGBA;
     GLint constexpr UnusedParam = 0;
     CHECKED_GL(glTexImage2D(target,
                             levelOfDetail,
@@ -628,35 +698,27 @@ void OpenGLRenderer::executeConfigureAtlas(atlas::ConfigureAtlas const& param)
                             glFmt,
                             type,
                             stub.data()));
+#endif
+
+    DisplayLog()(
+        "GL configure atlas: {} {} GL texture Id {}", param.size, param.properties.format, textureAtlasId());
 }
 
 void OpenGLRenderer::executeUploadTile(atlas::UploadTile const& param)
 {
-    auto const textureId = _textureAtlas.textureId;
-    Require(textureId != 0);
-
-    auto constexpr target = GL_TEXTURE_2D;
-    auto constexpr LevelOfDetail = 0;
-    auto constexpr BitmapType = GL_UNSIGNED_BYTE;
+    Require(textureAtlasId() != 0);
 
     // clang-format off
     // DisplayLog()("-> uploadTile: tex {} location {} format {} size {}",
     //              textureId, param.location, param.bitmapFormat, param.bitmapSize);
     // clang-format on
 
-    bindTexture(textureId);
-
-    // Image row alignment is 1 byte (OpenGL defaults to 4).
-    CHECKED_GL(glPixelStorei(GL_UNPACK_ALIGNMENT, param.rowAlignment));
-
-    // Forece RGBA as OpenGL ES cannot implicitly convert on the driver-side.
-    auto bitmapFormat = glFormat(param.bitmapFormat);
+    // {{{ Force RGBA as OpenGL ES cannot implicitly convert on the driver-side.
     auto bitmapData = (void const*) param.bitmap.data();
     auto bitmapConverted = atlas::Buffer();
     switch (param.bitmapFormat)
     {
         case atlas::Format::Red: {
-            bitmapFormat = GL_RGBA;
             bitmapConverted.resize(param.bitmapSize.area() * 4);
             bitmapData = bitmapConverted.data();
             auto s = param.bitmap.data();
@@ -672,7 +734,6 @@ void OpenGLRenderer::executeUploadTile(atlas::UploadTile const& param)
             break;
         }
         case atlas::Format::RGB: {
-            bitmapFormat = GL_RGBA;
             bitmapConverted.resize(param.bitmapSize.area() * 4);
             bitmapData = bitmapConverted.data();
             auto s = param.bitmap.data();
@@ -689,38 +750,44 @@ void OpenGLRenderer::executeUploadTile(atlas::UploadTile const& param)
         }
         case atlas::Format::RGBA: break;
     }
+    // }}}
 
-    CHECKED_GL(glTexSubImage2D(target,
-                               LevelOfDetail,
-                               param.location.x.value,
-                               param.location.y.value,
-                               unbox<GLsizei>(param.bitmapSize.width),
-                               unbox<GLsizei>(param.bitmapSize.height),
-                               bitmapFormat,
-                               BitmapType,
-                               bitmapData));
-}
+    // Image row alignment is 1 byte (OpenGL defaults to 4).
+    CHECKED_GL(glPixelStorei(GL_UNPACK_ALIGNMENT, param.rowAlignment));
+    // QOpenGLPixelTransferOptions transferOptions;
+    // transferOptions.setAlignment(1);
 
-void OpenGLRenderer::executeDestroyAtlas()
-{
-    glDeleteTextures(1, &_textureAtlas.textureId);
-    _textureAtlas.textureId = 0;
-}
-
-void OpenGLRenderer::bindTexture(GLuint textureId)
-{
-    if (_currentTextureId != textureId)
-    {
-        CHECKED_GL(glBindTexture(GL_TEXTURE_2D, textureId));
-        _currentTextureId = textureId;
-    }
+#if 0
+    _textureAtlas.gpuTexture.setData(param.location.x.value,
+                                     param.location.y.value,
+                                     0, // z
+                                     unbox<int>(param.bitmapSize.width),
+                                     unbox<int>(param.bitmapSize.height),
+                                     0, // depth
+                                     QOpenGLTexture::PixelFormat::RGBA,
+                                     QOpenGLTexture::PixelType::UInt8,
+                                     bitmapData /*, &transferOptions*/);
+#else
+    auto constexpr LevelOfDetail = 0;
+    auto constexpr BitmapType = GL_UNSIGNED_BYTE;
+    auto constexpr BitmapFormat = GL_RGBA;
+    glTexSubImage2D(GL_TEXTURE_2D,
+                    LevelOfDetail,
+                    param.location.x.value,
+                    param.location.y.value,
+                    unbox<GLsizei>(param.bitmapSize.width),
+                    unbox<GLsizei>(param.bitmapSize.height),
+                    BitmapFormat,
+                    BitmapType,
+                    bitmapData);
+#endif
 }
 
 void OpenGLRenderer::renderRectangle(int ix, int iy, Width width, Height height, RGBAColor color)
 {
     auto const x = static_cast<GLfloat>(ix);
     auto const y = static_cast<GLfloat>(iy);
-    auto const z = GLfloat { 0.0f };
+    auto const z = ZAxisDepths::BackgroundSGR;
     auto const r = unbox<GLfloat>(width);
     auto const s = unbox<GLfloat>(height);
     auto const [cr, cg, cb, ca] = atlas::normalize(color);
@@ -746,7 +813,6 @@ optional<terminal::renderer::AtlasTextureScreenshot> OpenGLRenderer::readAtlas()
 {
     // NB: to get all atlas pages, call this from instance base id up to and including current
     // instance id of the given allocator.
-
     auto output = terminal::renderer::AtlasTextureScreenshot {};
     output.atlasInstanceId = 0;
     output.size = _textureAtlas.textureSize;
@@ -757,8 +823,8 @@ optional<terminal::renderer::AtlasTextureScreenshot> OpenGLRenderer::readAtlas()
     auto fbo = GLuint {};
     CHECKED_GL(glGenFramebuffers(1, &fbo));
     CHECKED_GL(glBindFramebuffer(GL_FRAMEBUFFER, fbo));
-    CHECKED_GL(glFramebufferTexture2D(
-        GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, _textureAtlas.textureId, 0));
+    CHECKED_GL(
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textureAtlasId(), 0));
     CHECKED_GL(glReadPixels(0,
                             0,
                             unbox<GLsizei>(output.size.width),
@@ -799,14 +865,10 @@ pair<ImageSize, vector<uint8_t>> OpenGLRenderer::takeScreenshot()
 
 void OpenGLRenderer::clear(terminal::RGBAColor fillColor)
 {
-    if (fillColor != _renderStateCache.backgroundColor)
-    {
-        auto const clearColor = atlas::normalize(fillColor);
-        glClearColor(clearColor[0], clearColor[1], clearColor[2], clearColor[3]);
-        _renderStateCache.backgroundColor = fillColor;
-    }
+    _renderStateCache.backgroundColor = fillColor;
 
-    glClear(GL_COLOR_BUFFER_BIT);
+    // TODO(pr) only call this if no background image is set? OR render background image after that one.
+    renderRectangle(0, 0, _viewSize.width, _viewSize.height, fillColor);
 }
 
 // }}}
@@ -934,7 +996,7 @@ GLuint OpenGLRenderer::createAndUploadImage(QSize imageSize,
 {
     auto textureId = GLuint {};
     CHECKED_GL(glGenTextures(1, &textureId));
-    CHECKED_GL(bindTexture(textureId));
+    CHECKED_GL(glBindTexture(GL_TEXTURE_2D, textureId));
 
     CHECKED_GL(glTexParameteri(GL_TEXTURE_2D,
                                GL_TEXTURE_MAG_FILTER,
@@ -975,6 +1037,7 @@ void OpenGLRenderer::executeRenderBackground(float timeValue)
 
     auto const w = unbox<float>(_renderTargetSize.width);
     auto const h = unbox<float>(_renderTargetSize.height);
+    auto const z = ZAxisDepths::BackgroundImage;
 
     // {{{ setup uniforms
     // clang-format off
@@ -987,7 +1050,8 @@ void OpenGLRenderer::executeRenderBackground(float timeValue)
     // Blur is now implemented offscreen via Blur::blurDualKawase().
     // clang-format on
 
-    _backgroundShader->setUniformValue(_backgroundUniformLocations.projection, _projectionMatrix);
+    auto const mvp = _projectionMatrix * _viewMatrix * _modelMatrix;
+    _backgroundShader->setUniformValue(_backgroundUniformLocations.projection, mvp);
     _backgroundShader->setUniformValue(_backgroundUniformLocations.backgroundResolution,
                                        _renderStateCache.backgroundResolution);
     _backgroundShader->setUniformValue(_backgroundUniformLocations.viewportResolution, qViewportSize);
@@ -999,17 +1063,17 @@ void OpenGLRenderer::executeRenderBackground(float timeValue)
     // clang-format off
     auto vertices = array {
         // triangle 1
-        BackgroundShaderParams{vec3{ 0.0f, 0.0f, 0.0f }, vec2 { 0.0f, 1.0f } }, // bottom left
-        BackgroundShaderParams{vec3{    w, 0.0f, 0.0f }, vec2 { 1.0f, 1.0f } }, // bottom right
-        BackgroundShaderParams{vec3{    w,    h, 0.0f }, vec2 { 1.0f, 0.0f } }, // top right
+        BackgroundShaderParams{vec3{ 0.0f, 0.0f, z }, vec2 { 0.0f, 1.0f } }, // bottom left
+        BackgroundShaderParams{vec3{    w, 0.0f, z }, vec2 { 1.0f, 1.0f } }, // bottom right
+        BackgroundShaderParams{vec3{    w,    h, z }, vec2 { 1.0f, 0.0f } }, // top right
         // riangle 2
-        BackgroundShaderParams{vec3{    w,    h, 0.0f }, vec2 { 1.0f, 0.0f } }, // top right
-        BackgroundShaderParams{vec3{    0,    h, 0.0f }, vec2 { 0.0f, 0.0f } }, // top left
-        BackgroundShaderParams{vec3{ 0.0f,    0, 0.0f }, vec2 { 0.0f, 1.0f } }, // bottom left
+        BackgroundShaderParams{vec3{    w,    h, z }, vec2 { 1.0f, 0.0f } }, // top right
+        BackgroundShaderParams{vec3{    0,    h, z }, vec2 { 0.0f, 0.0f } }, // top left
+        BackgroundShaderParams{vec3{ 0.0f,    0, z }, vec2 { 0.0f, 1.0f } }, // bottom left
     };
 
     CHECKED_GL(glActiveTexture(GL_TEXTURE0));
-    CHECKED_GL(bindTexture(_backgroundImageTexture));
+    CHECKED_GL(glBindTexture(GL_TEXTURE_2D, _backgroundImageTexture));
     CHECKED_GL(glBindVertexArray(_backgroundVAO));
     CHECKED_GL(glBindBuffer(GL_ARRAY_BUFFER, _backgroundVBO));
 
@@ -1017,6 +1081,8 @@ void OpenGLRenderer::executeRenderBackground(float timeValue)
 
     auto constexpr ElementCount = sizeof(BackgroundShaderParams) / sizeof(float);
     CHECKED_GL(glDrawArrays(GL_TRIANGLES, 0, 6 * ElementCount));
+
+    CHECKED_GL(glBindVertexArray(0));
     // clang-format on
 }
 // }}}

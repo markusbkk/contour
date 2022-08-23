@@ -213,6 +213,7 @@ install_deps_ubuntu()
             libqt6widgets6
             qt6-base-dev
             qt6-base-dev-tools
+            qt6-declarative-dev
             qt6-multimedia-dev
         "
     else
@@ -221,7 +222,9 @@ install_deps_ubuntu()
             libqt5opengl5-dev
             libqt5x11extras5-dev
             qtbase5-dev
+            qtdeclarative5-dev
             qtmultimedia5-dev
+            qtquickcontrols2-5-dev
         "
     fi
 
@@ -280,6 +283,7 @@ install_deps_FreeBSD()
         qt5-multimedia \
         qt5-network \
         qt5-qmake \
+        qt5-quickcontrols2 \
         qt5-widgets \
         qt5-x11extras \
         range-v3 \
@@ -376,6 +380,7 @@ install_deps_fedora()
             qt5-qtbase-gui
             qt5-qtmultimedia-devel
             qt5-qtx11extras-devel
+            qt5-qtquickcontrols2-devel
         "
     fi
     # Sadly, gsl-devel system package is too old to be used.

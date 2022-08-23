@@ -24,8 +24,10 @@
 #include <QtGui/QOpenGLExtraFunctions>
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     #include <QtOpenGL/QOpenGLShaderProgram>
+    #include <QtOpenGL/QOpenGLTexture>
 #else
     #include <QtGui/QOpenGLShaderProgram>
+    #include <QtGui/QOpenGLTexture>
 #endif
 
 #include <chrono>
@@ -39,10 +41,13 @@ namespace contour::display
 struct ShaderConfig;
 
 class OpenGLRenderer final:
+    public QObject,
     public terminal::renderer::RenderTarget,
     public terminal::renderer::atlas::AtlasBackend,
     public QOpenGLExtraFunctions
 {
+    Q_OBJECT
+
     using ImageSize = terminal::ImageSize;
 
     using AtlasTextureScreenshot = terminal::renderer::AtlasTextureScreenshot;
@@ -63,6 +68,7 @@ class OpenGLRenderer final:
     OpenGLRenderer(ShaderConfig const& textShaderConfig,
                    ShaderConfig const& rectShaderConfig,
                    ShaderConfig const& backgroundImageShaderConfig,
+                   crispy::ImageSize viewSize,
                    crispy::ImageSize renderSize,
                    crispy::ImageSize textureTileSize,
                    terminal::renderer::PageMargin margin);
@@ -77,6 +83,9 @@ class OpenGLRenderer final:
 
     // RenderTarget implementation
     void setRenderSize(crispy::ImageSize _size) override;
+    void setTranslation(float x, float y, float z) noexcept;
+    void setViewSize(crispy::ImageSize size) noexcept { _viewSize = size; }
+    void setModelMatrix(QMatrix4x4 matrix) noexcept;
     void setMargin(terminal::renderer::PageMargin _margin) noexcept override;
     std::optional<AtlasTextureScreenshot> readAtlas() override;
     AtlasBackend& textureScheduler() override;
@@ -103,10 +112,12 @@ class OpenGLRenderer final:
         return uptimeSecs;
     }
 
+  public slots:
+    void initialize();
+
   private:
     // private helper methods
     //
-    void initialize();
     void initializeBackgroundRendering();
     void initializeTextureRendering();
     void initializeRectRendering();
@@ -125,11 +136,8 @@ class OpenGLRenderer final:
     void executeConfigureAtlas(ConfigureAtlas const& _param);
     void executeUploadTile(UploadTile const& _param);
     void executeRenderTile(RenderTile const& _param);
-    void executeDestroyAtlas();
 
     //? void renderRectangle(int _x, int _y, int _width, int _height, QVector4D const& _color);
-
-    void bindTexture(GLuint _textureId);
 
     // -------------------------------------------------------------------------------------------
     // private data members
@@ -169,8 +177,11 @@ class OpenGLRenderer final:
     bool _initialized = false;
     std::chrono::steady_clock::time_point _startTime;
     std::chrono::steady_clock::time_point _now;
+    crispy::ImageSize _viewSize;
     crispy::ImageSize _renderTargetSize;
     QMatrix4x4 _projectionMatrix;
+    QMatrix4x4 _viewMatrix;
+    QMatrix4x4 _modelMatrix;
 
     terminal::renderer::PageMargin _margin {};
 
@@ -183,9 +194,6 @@ class OpenGLRenderer final:
     GLuint _textVAO {}; // Vertex Array Object, covering all buffer objects
     GLuint _textVBO {}; // Buffer containing the vertex coordinates
     // TODO: GLuint ebo_{};
-
-    // currently bound texture ID during execution
-    GLuint _currentTextureId = std::numeric_limits<GLuint>::max();
 
     // background / background-image related fields
     GLuint _backgroundVAO {};
@@ -205,11 +213,19 @@ class OpenGLRenderer final:
     // index equals AtlasID
     struct AtlasAttributes
     {
+        // QOpenGLTexture gpuTexture { QOpenGLTexture::Target::Target2D };
         GLuint textureId {};
         ImageSize textureSize {};
         terminal::renderer::atlas::AtlasProperties properties {};
     };
     AtlasAttributes _textureAtlas {};
+
+    [[nodiscard]] GLuint textureAtlasId() const noexcept
+    {
+        assert(_textureAtlas.textureId != 0);
+        return _textureAtlas.textureId;
+        // return _textureAtlas.gpuTexture.textureId();
+    }
 
     // private data members for rendering filled rectangles
     //
