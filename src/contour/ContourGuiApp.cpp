@@ -107,6 +107,9 @@ crispy::cli::Command ContourGuiApp::parameterDefinition() const
                               "Enables debug logging, using a comma (,) seperated list of tags.",
                               "TAGS" },
                 CLI::Option { "live-config", CLI::Value { false }, "Enables live config reloading." },
+#if defined(CONTOUR_BUILD_FOR_FLATPAK)
+                CLI::Option { "sandbox", CLI::Value { false }, "Enables live config reloading." },
+#endif
                 CLI::Option {
                     "dump-state-at-exit",
                     CLI::Value { ""s },

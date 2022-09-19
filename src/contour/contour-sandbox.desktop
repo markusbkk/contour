@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+TryExec=contour sandbox
+Exec=contour
+Icon=org.contourterminal.Contour
+Terminal=false
+Categories=Qt;System;TerminalEmulator;
+Actions=NewWindow;
+X-KDE-AuthorizeAction=shell_access
+StartupWMClass=contour
+
+Name=Contour (Sandbox Development Environment)
+GenericName=Terminal
+Comment=Command line access
+
+[Desktop Action NewWindow]
+Exec=contour sandbox
+Name=Open a New Window

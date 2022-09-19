@@ -9,6 +9,11 @@ option(CONTOUR_VT_METRICS "Enables collecting and exit-printing some VT usage me
 option(CONTOUR_SCROLLBAR "Enables scrollbar in GUI frontend." ON)
 option(CONTOUR_BUILD_WITH_QT6 "Use Qt 6" OFF)
 
+# This does not hurt to enable outside of flatpak, but only makes sense when
+# being run from within flatpak environment.
+option(CONTOUR_BUILD_FOR_FLATPAK "Enable Flatpak related features." OFF)
+# TODO(pr) ^^^ detect automatically
+
 set(QtX11Extras)
 if(NOT(WIN32) AND NOT(APPLE))
     set(QtX11Extras X11Extras)
@@ -66,6 +71,10 @@ set_target_properties(contour PROPERTIES AUTORCC ON)
 
 # Disable all deprecated Qt functions prior to Qt 6.0
 target_compile_definitions(contour PRIVATE QT_DISABLE_DEPRECATED_BEFORE=0x050F00)
+
+if(CONTOUR_BUILD_FOR_FLATPAK)
+    target_compile_definitions(contour PRIVATE CONTOUR_BUILD_FOR_FLATPAK)
+endif()
 
 if(CONTOUR_PERF_STATS)
     target_compile_definitions(contour PRIVATE CONTOUR_PERF_STATS)
@@ -306,6 +315,9 @@ else()
     include(GNUInstallDirs)
     install(TARGETS contour DESTINATION bin)
     install(FILES "contour.desktop" DESTINATION "${CMAKE_INSTALL_DATADIR}/applications" RENAME "${AppId}.desktop")
+    if(CONTOUR_BUILD_FOR_FLATPAK)
+        install(FILES "contour-sandbox.desktop" DESTINATION "${CMAKE_INSTALL_DATADIR}/applications" RENAME "${AppId}.Sandbox.desktop")
+    endif()
     install(FILES "contour-run.desktop" DESTINATION "${CMAKE_INSTALL_DATADIR}/kservices5/ServiceMenus" RENAME "${AppId}.RunIn.desktop")
     install(FILES "res/images/contour-logo-512.png" DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/512x512/apps" RENAME "${AppId}.png")
     install(FILES "res/images/contour-logo-256.png" DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/256x256/apps" RENAME "${AppId}.png")
