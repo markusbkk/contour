@@ -1241,8 +1241,6 @@ void TerminalSession::configureDisplay()
     display_->setHyperlinkDecoration(profile_.hyperlinkDecoration.normal, profile_.hyperlinkDecoration.hover);
 
     setWindowTitle(terminal_.windowTitle());
-
-    display_->logDisplayTopInfo();
 }
 
 uint8_t TerminalSession::matchModeFlags() const

@@ -14,6 +14,7 @@
 #pragma once
 
 #include <contour/display/Blur.h>
+#include <contour/display/ShaderConfig.h>
 
 #include <terminal/Image.h>
 
@@ -30,6 +31,8 @@
     #include <QtGui/QOpenGLTexture>
 #endif
 
+#include <QtQuick/QQuickWindow>
+
 #include <chrono>
 #include <memory>
 #include <optional>
@@ -37,8 +40,6 @@
 
 namespace contour::display
 {
-
-struct ShaderConfig;
 
 class OpenGLRenderer final:
     public QObject,
@@ -65,15 +66,17 @@ class OpenGLRenderer final:
      * @param textureAtlasSize  size in pixels for the texture atlas. Must be power of two.
      * @param tileSize          size in pixels for each tile. This should be the grid cell size.
      */
-    OpenGLRenderer(ShaderConfig const& textShaderConfig,
-                   ShaderConfig const& rectShaderConfig,
-                   ShaderConfig const& backgroundImageShaderConfig,
+    OpenGLRenderer(ShaderConfig textShaderConfig,
+                   ShaderConfig rectShaderConfig,
+                   ShaderConfig backgroundImageShaderConfig,
                    crispy::ImageSize viewSize,
                    crispy::ImageSize renderSize,
                    crispy::ImageSize textureTileSize,
                    terminal::renderer::PageMargin margin);
 
     ~OpenGLRenderer() override;
+
+    void setWindow(QQuickWindow* window) { _window = window; }
 
     // AtlasBackend implementation
     ImageSize atlasSize() const noexcept override;
@@ -112,12 +115,15 @@ class OpenGLRenderer final:
         return uptimeSecs;
     }
 
+    [[nodiscard]] constexpr bool initialized() const noexcept { return _initialized; }
+
   public slots:
     void initialize();
 
   private:
     // private helper methods
     //
+    void logInfo();
     void initializeBackgroundRendering();
     void initializeTextureRendering();
     void initializeRectRendering();
@@ -186,8 +192,9 @@ class OpenGLRenderer final:
     terminal::renderer::PageMargin _margin {};
 
     std::unique_ptr<QOpenGLShaderProgram> _textShader;
-    int _textProjectionLocation;
-    int _textTimeLocation;
+    int _textProjectionLocation = -1;
+    int _textTextureAtlasLocation = -1;
+    int _textTimeLocation = -1;
 
     // private data members for rendering textures
     //
@@ -229,14 +236,20 @@ class OpenGLRenderer final:
 
     // private data members for rendering filled rectangles
     //
+    ShaderConfig _textShaderConfig;
+    ShaderConfig _rectShaderConfig;
+    ShaderConfig _backgroundImageShaderConfig;
+
     std::vector<GLfloat> _rectBuffer;
     std::unique_ptr<QOpenGLShaderProgram> _rectShader;
-    int _rectProjectionLocation;
-    int _rectTimeLocation;
+    int _rectProjectionLocation = -1;
+    int _rectTimeLocation = -1;
     GLuint _rectVAO {};
     GLuint _rectVBO {};
 
     std::optional<ScreenshotCallback> _pendingScreenshotCallback;
+
+    QQuickWindow* _window = nullptr;
 
     // render state cache
     struct

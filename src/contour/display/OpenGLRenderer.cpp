@@ -26,6 +26,7 @@
 #include <range/v3/all.hpp>
 
 #include <QtCore/QtGlobal>
+#include <QtGui/QGuiApplication>
 #include <QtGui/QImage>
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
@@ -191,9 +192,9 @@ namespace
  *
  */
 
-OpenGLRenderer::OpenGLRenderer(ShaderConfig const& textShaderConfig,
-                               ShaderConfig const& rectShaderConfig,
-                               ShaderConfig const& backgroundImageShaderConfig,
+OpenGLRenderer::OpenGLRenderer(ShaderConfig textShaderConfig,
+                               ShaderConfig rectShaderConfig,
+                               ShaderConfig backgroundImageShaderConfig,
                                ImageSize viewSize,
                                ImageSize targetSurfaceSize,
                                ImageSize /*textureTileSize*/,
@@ -202,16 +203,11 @@ OpenGLRenderer::OpenGLRenderer(ShaderConfig const& textShaderConfig,
     _now { _startTime },
     _viewSize { viewSize },
     _margin { margin },
-    _textShader { createShader(textShaderConfig) },
-    _textProjectionLocation { _textShader->uniformLocation("vs_projection") },
-    _textTimeLocation { _textShader->uniformLocation("u_time") },
-    _backgroundShader { createShader(backgroundImageShaderConfig) },
-    _rectShader { createShader(rectShaderConfig) },
-    _rectProjectionLocation { _rectShader->uniformLocation("u_projection") },
-    _rectTimeLocation { _rectShader->uniformLocation("u_time") }
+    _textShaderConfig { std::move(textShaderConfig) },
+    _rectShaderConfig { std::move(rectShaderConfig) },
+    _backgroundImageShaderConfig { std::move(backgroundImageShaderConfig) }
 {
     DisplayLog()("OpenGLRenderer: Constructing with render size {}.", _renderTargetSize);
-    initializeOpenGLFunctions();
     setRenderSize(targetSurfaceSize);
 }
 
@@ -328,23 +324,82 @@ void OpenGLRenderer::initialize()
     if (_initialized)
         return;
 
+    Q_ASSERT(_window != nullptr);
+    QSGRendererInterface* rif = _window->rendererInterface();
+    Q_ASSERT(rif->graphicsApi() == QSGRendererInterface::OpenGL);
+
     _initialized = true;
 
+    initializeOpenGLFunctions();
+    CONSUME_GL_ERRORS();
+
     DisplayLog()("OpenGLRenderer: Initializing.");
+    CHECKED_GL(_textShader = createShader(_textShaderConfig));
+    CHECKED_GL(_textProjectionLocation = _textShader->uniformLocation(
+                   "vs_projection")); // NOLINT(cppcoreguidelines-prefer-member-initializer)
+    CHECKED_GL(_textTextureAtlasLocation = _textShader->uniformLocation("fs_textureAtlas"));
+    CHECKED_GL(_textTimeLocation = _textShader->uniformLocation(
+                   "u_time")); // NOLINT(cppcoreguidelines-prefer-member-initializer)
+    CHECKED_GL(_backgroundShader = createShader(_backgroundImageShaderConfig));
+    CHECKED_GL(_rectShader = createShader(_rectShaderConfig));
+    CHECKED_GL(_rectProjectionLocation = _rectShader->uniformLocation(
+                   "u_projection")); // NOLINT(cppcoreguidelines-prefer-member-initializer)
+    CHECKED_GL(_rectTimeLocation = _rectShader->uniformLocation(
+                   "u_time")); // NOLINT(cppcoreguidelines-prefer-member-initializer)
 
     setRenderSize(_renderTargetSize);
 
     assert(_textProjectionLocation != -1);
 
     bound(*_textShader, [&]() {
-        CHECKED_GL(_textShader->setUniformValue("fs_textureAtlas", 0)); // GL_TEXTURE0?
         auto const textureAtlasWidth = unbox<GLfloat>(_textureAtlas.textureSize.width);
         CHECKED_GL(_textShader->setUniformValue("pixel_x", 1.0f / textureAtlasWidth));
+        CHECKED_GL(_textShader->setUniformValue(_textTextureAtlasLocation, 0)); // GL_TEXTURE0?
     });
 
     initializeBackgroundRendering();
     initializeRectRendering();
     initializeTextureRendering();
+
+    logInfo();
+}
+
+void OpenGLRenderer::logInfo()
+{
+    Require(QOpenGLContext::currentContext() != nullptr);
+    QOpenGLFunctions& glFunctions = *QOpenGLContext::currentContext()->functions();
+
+    auto const openGLTypeString = QOpenGLContext::currentContext()->isOpenGLES() ? "OpenGL/ES" : "OpenGL";
+    DisplayLog()("[FYI] OpenGL type         : {}", openGLTypeString);
+    DisplayLog()("[FYI] OpenGL renderer     : {}", (char const*) glFunctions.glGetString(GL_RENDERER));
+
+    GLint versionMajor {};
+    GLint versionMinor {};
+    glFunctions.glGetIntegerv(GL_MAJOR_VERSION, &versionMajor);
+    glFunctions.glGetIntegerv(GL_MINOR_VERSION, &versionMinor);
+    DisplayLog()("[FYI] OpenGL version      : {}.{}", versionMajor, versionMinor);
+    DisplayLog()("[FYI] Widget size         : {} ({})", _renderTargetSize, _viewSize);
+
+    string glslVersions = (char const*) glFunctions.glGetString(GL_SHADING_LANGUAGE_VERSION);
+#if 0 // defined(GL_NUM_SHADING_LANGUAGE_VERSIONS)
+    QOpenGLExtraFunctions& glFunctionsExtra = *QOpenGLContext::currentContext()->extraFunctions();
+    GLint glslNumShaderVersions {};
+    glFunctions.glGetIntegerv(GL_NUM_SHADING_LANGUAGE_VERSIONS, &glslNumShaderVersions);
+    glFunctions.glGetError(); // consume possible OpenGL error.
+    if (glslNumShaderVersions > 0)
+    {
+        glslVersions += " (";
+        for (GLint k = 0, l = 0; k < glslNumShaderVersions; ++k)
+            if (auto const str = glFunctionsExtra.glGetStringi(GL_SHADING_LANGUAGE_VERSION, GLuint(k)); str && *str)
+            {
+                glslVersions += (l ? ", " : "");
+                glslVersions += (char const*) str;
+                l++;
+            }
+        glslVersions += ')';
+    }
+#endif
+    DisplayLog()("[FYI] GLSL version        : {}", glslVersions);
 }
 
 void OpenGLRenderer::clearCache()

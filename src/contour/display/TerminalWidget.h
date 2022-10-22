@@ -160,8 +160,7 @@ class TerminalWidget: public QQuickItem
 
     [[nodiscard]] double contentScale() const;
 
-    void logDisplayTopInfo();
-    void logDisplayInfo();
+    Q_INVOKABLE void logDisplayInfo();
 
     void releaseResources() override;
 

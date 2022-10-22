@@ -304,21 +304,6 @@ void TerminalWidget::setSession(TerminalSession* newSession)
         // TODO: , WindowMargin(windowMargin_.left, windowMargin_.bottom);
     );
 
-    // auto const textureTileSize = gridMetrics().cellSize;
-    // auto const viewportMargin = terminal::renderer::PageMargin {}; // TODO margin
-    // auto const precalculatedVieewSize = [this]() -> ImageSize {
-    //     auto const uiSize = ImageSize { Width::cast_from(width()), Height::cast_from(height()) };
-    //     return uiSize * contentScale();
-    // }();
-    // renderTarget_ = new OpenGLRenderer(
-    //     session_->profile().textShader.value_or(builtinShaderConfig(ShaderClass::Text)),
-    //     session_->profile().backgroundShader.value_or(builtinShaderConfig(ShaderClass::Background)),
-    //     session_->profile().backgroundImageShader.value_or(builtinShaderConfig(ShaderClass::BackgroundImage)),
-    //     precalculatedVieewSize,
-    //     textureTileSize,
-    //     viewportMargin);
-    // renderer_->setRenderTarget(*renderTarget_);
-
     applyFontDPI();
     updateSizeProperties();
 
@@ -447,7 +432,7 @@ void TerminalWidget::applyFontDPI()
     DisplayLog()("Applying DPI {}.", newFontDPI);
     lastFontDPI_ = newFontDPI;
 
-    logDisplayInfo();
+    //logDisplayInfo();
 
     if (!session_)
         return;
@@ -469,66 +454,6 @@ void TerminalWidget::applyFontDPI()
     applyResize(newPixelSize, *session_, *renderer_);
 }
 
-void TerminalWidget::logDisplayTopInfo()
-{
-    static bool loggedOnce = false;
-    if (loggedOnce)
-        return;
-    loggedOnce = true;
-
-    QOpenGLFunctions& glFunctions = *QOpenGLContext::currentContext()->functions();
-
-    Require(QOpenGLContext::currentContext() != nullptr);
-
-    auto const openGLTypeString = QOpenGLContext::currentContext()->isOpenGLES() ? "OpenGL/ES" : "OpenGL";
-#if defined(CONTOUR_BUILD_TYPE)
-    DisplayLog()("[FYI] Build type          : {}", CONTOUR_BUILD_TYPE);
-#endif
-    DisplayLog()("[FYI] Application PID     : {}", QCoreApplication::applicationPid());
-    DisplayLog()("[FYI] OpenGL type         : {}", openGLTypeString);
-    DisplayLog()("[FYI] OpenGL renderer     : {}", (char const*) glFunctions.glGetString(GL_RENDERER));
-    DisplayLog()("[FYI] Qt platform         : {}", QGuiApplication::platformName().toStdString());
-
-    GLint versionMajor {};
-    GLint versionMinor {};
-    glFunctions.glGetIntegerv(GL_MAJOR_VERSION, &versionMajor);
-    glFunctions.glGetIntegerv(GL_MINOR_VERSION, &versionMinor);
-    DisplayLog()("[FYI] OpenGL version      : {}.{}", versionMajor, versionMinor);
-    DisplayLog()("[FYI] Content scaling     : {:.2}", contentScale());
-    DisplayLog()("[FYI] Widget size         : {}x{} ({}x{})",
-                 width(),
-                 height(),
-                 int(double(width()) * contentScale()),
-                 int(double(height()) * contentScale()));
-
-    string glslVersions = (char const*) glFunctions.glGetString(GL_SHADING_LANGUAGE_VERSION);
-
-    // TODO: pass phys()/logical?) dpi to font manager, so font size can be applied right
-    // TODO: also take window monitor switches into account
-
-#if 0 // defined(GL_NUM_SHADING_LANGUAGE_VERSIONS)
-    QOpenGLExtraFunctions& glFunctionsExtra = *QOpenGLContext::currentContext()->extraFunctions();
-    GLint glslNumShaderVersions {};
-    glFunctions.glGetIntegerv(GL_NUM_SHADING_LANGUAGE_VERSIONS, &glslNumShaderVersions);
-    glFunctions.glGetError(); // consume possible OpenGL error.
-    if (glslNumShaderVersions > 0)
-    {
-        glslVersions += " (";
-        for (GLint k = 0, l = 0; k < glslNumShaderVersions; ++k)
-            if (auto const str = glFunctionsExtra.glGetStringi(GL_SHADING_LANGUAGE_VERSION, GLuint(k)); str && *str)
-            {
-                glslVersions += (l ? ", " : "");
-                glslVersions += (char const*) str;
-                l++;
-            }
-        glslVersions += ')';
-    }
-#endif
-    DisplayLog()("[FYI] GLSL version        : {}", glslVersions);
-
-    logDisplayInfo();
-}
-
 void TerminalWidget::logDisplayInfo()
 {
     if (!session_)
@@ -543,6 +468,11 @@ void TerminalWidget::logDisplayInfo()
         Height::cast_from(window()->screen()->size().height())
     };
     auto const actualScreenSize = normalScreenSize * window()->effectiveDevicePixelRatio();
+#if defined(CONTOUR_BUILD_TYPE)
+    DisplayLog()("[FYI] Build type          : {}", CONTOUR_BUILD_TYPE);
+#endif
+    DisplayLog()("[FYI] Application PID     : {}", QCoreApplication::applicationPid());
+    DisplayLog()("[FYI] Qt platform         : {}", QGuiApplication::platformName().toStdString());
     DisplayLog()("[FYI] Refresh rate        : {} Hz", refreshRate());
     DisplayLog()("[FYI] Screen size         : {}", actualScreenSize);
     DisplayLog()("[FYI] Device pixel ratio  : {}", window()->devicePixelRatio());
@@ -650,6 +580,7 @@ void TerminalWidget::createRenderer()
         precalculatedTargetSize,
         textureTileSize,
         viewportMargin);
+    renderTarget_->setWindow(window());
     renderer_->setRenderTarget(*renderTarget_);
 
     connect(window(),
@@ -682,8 +613,6 @@ void TerminalWidget::createRenderer()
         applyResize(actualWidgetSize, *session_, *renderer_);
     }
     // }}}
-
-    logDisplayTopInfo();
 }
 
 QMatrix4x4 TerminalWidget::createModelMatrix() const
@@ -1175,7 +1104,7 @@ void TerminalWidget::setFonts(terminal::renderer::FontDescriptions fonts)
     {
         // resize widget (same pixels, but adjusted terminal rows/columns and margin)
         applyResize(pixelSize(), *session_, *renderer_);
-        logDisplayInfo();
+        //logDisplayInfo();
     }
 }
 
@@ -1196,7 +1125,7 @@ bool TerminalWidget::setFontSize(text::font_size _size)
     auto const actualWidgetSize = qtBaseWidgetSize * contentScale();
     applyResize(actualWidgetSize, *session_, *renderer_);
     updateSizeProperties();
-    logDisplayInfo();
+    //logDisplayInfo();
     return true;
 }
 

@@ -352,6 +352,13 @@ int ContourGuiApp::terminalGuiAction()
     auto qtArgsCount = static_cast<int>(qtArgsPtr.size());
     QGuiApplication app(qtArgsCount, (char**) qtArgsPtr.data());
 
+#if QT_VERSION >= 0x060000
+    // Enforce OpenGL over any other. As much as I'd love to provide other backends, too.
+    // We currently only support OpenGL.
+    // If anyone feels happy about it, I'd love to at least provide Vulkan. ;-)
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+#endif
+
     app.setWindowIcon(QIcon(":/contour/logo-256.png"));
 
     QSurfaceFormat::setDefaultFormat(display::createSurfaceFormat());

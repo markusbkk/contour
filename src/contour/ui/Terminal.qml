@@ -1,7 +1,7 @@
 import Contour.Terminal 1.0
 import QtQuick 2.6
 import QtQuick.Controls 2.6
-import QtMultimedia 5.15
+import QtMultimedia
 import QtQuick.Window 2.6
 
 ContourTerminal
@@ -38,12 +38,12 @@ ContourTerminal
     RequestPermission {
         id: requestFontChangeDialog
         text: "The host application is requesting to change the display font."
-        onYes: {
+        onYesClicked: {
             const rememberChoice = requestFontChangeDialog.clickedRememberChoice();
             console.log("[Terminal] Allowing font change request.", rememberChoice ? "to all" : "single", vtWidget.session)
             vtWidget.session.applyPendingFontChange(true, rememberChoice);
         }
-        onNo: {
+        onNoClicked: {
             const rememberChoice = requestFontChangeDialog.clickedRememberChoice();
             console.log("[Terminal] Denying font change request.", rememberChoice ? "to all" : "single", vtWidget.session)
             vtWidget.session.applyPendingFontChange(false, rememberChoice);
@@ -58,12 +58,12 @@ ContourTerminal
     RequestPermission {
         id: requestBufferCaptureDialog
         text: "The host application is requesting to capture the termainl buffer."
-        onYes: {
+        onYesClicked: {
             const rememberChoice = requestBufferCaptureDialog.clickedRememberChoice();
             console.log("[Terminal] Allowing font change request.", rememberChoice ? "to all" : "single")
             vtWidget.session.executePendingBufferCapture(true, rememberChoice);
         }
-        onNo: {
+        onNoClicked: {
             const rememberChoice = requestBufferCaptureDialog.clickedRememberChoice();
             console.log("[Terminal] Denying font change request.", rememberChoice ? "to all" : "single")
             vtWidget.session.executePendingBufferCapture(false, rememberChoice);
@@ -119,6 +119,8 @@ ContourTerminal
         // Permission-wall related hooks.
         vt.requestPermissionForFontChange.connect(requestFontChangeDialog.open);
         vt.requestPermissionForBufferCapture.connect(requestBufferCaptureDialog.open);
+
+        vtWidget.logDisplayInfo();
     }
 
     // {{{ playground: animation
