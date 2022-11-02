@@ -484,6 +484,7 @@ void TextRenderer::renderLine(RenderLine const& renderLine)
     {
         auto const gridPosition = CellLocation { renderLine.lineOffset, columnOffset };
         auto const width = graphemeClusterWidth(graphemeCluster);
+        fmt::print("GC width {} for {}\n", width, unicode::convert_to<char>(u32string_view(graphemeCluster.data(), graphemeCluster.size())));
         renderCell(gridPosition, graphemeCluster, textStyle, renderLine.textAttributes.foregroundColor);
 
         for (int i = 1; i < width; ++i)
