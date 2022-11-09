@@ -19,6 +19,7 @@
 #include <cassert>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <ostream>
 #include <type_traits>
 #include <variant>
@@ -892,6 +893,12 @@ constexpr unsigned setDynamicColorCommand(DynamicColorName name)
         default: return 0;
     }
 }
+
+struct SearchResult
+{
+    std::optional<ColumnOffset> column;
+    int remainingText = 0;
+};
 
 } // namespace terminal
 

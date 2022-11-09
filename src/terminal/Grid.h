@@ -147,6 +147,59 @@ struct LogicalLine
             output += line.get().toUtf8();
         return output;
     }
+
+    // Searches from left to right, taking into account line wrapping
+    [[nodiscard]] std::optional<terminal::CellLocation> search(std::u32string_view searchText,
+                                                               ColumnOffset startPosition) const
+    {
+        // TODO Handle searchText larger than the line length
+        auto i = top;
+        for (auto line = lines.begin(); line != lines.end(); ++line)
+        {
+            auto result = line->get().search(searchText, startPosition);
+            if (result.column.has_value() && result.remainingText == 0)
+                return CellLocation { i, result.column.value() };
+            if (result.remainingText != 0)
+            {
+                auto copy = searchText;
+                copy.remove_prefix(copy.size() - result.remainingText);
+                if (line + 1 != lines.end() && (line + 1)->get().matchTextAt(copy, ColumnOffset(0)))
+                    return CellLocation { i,
+                                          ColumnOffset::cast_from(
+                                              line->get().size().value
+                                              - (searchText.size() - result.remainingText)) };
+            }
+            startPosition = ColumnOffset(0);
+            ++i;
+        }
+        return std::nullopt;
+    }
+
+    // Searches from right to left, taking into account line wrapping
+    [[nodiscard]] std::optional<terminal::CellLocation> searchReverse(std::u32string_view searchText,
+                                                                      ColumnOffset startPosition) const
+    {
+        // TODO Handle searchText larger than the line length
+        auto i = bottom;
+        auto const lastColumn = boxed_cast<ColumnOffset>(lines.front().get().size());
+        for (auto line = lines.rbegin(); line != lines.rend(); ++line)
+        {
+            auto result = line->get().searchReverse(searchText, startPosition);
+            if (result.column.has_value() && result.remainingText == 0)
+                return CellLocation { i, result.column.value() };
+            if (result.remainingText != 0)
+            {
+                auto copy = searchText;
+                copy.remove_suffix(copy.size() - result.remainingText);
+                if (line + 1 != lines.rend()
+                    && (line + 1)->get().matchTextAt(copy, lastColumn - result.remainingText))
+                    return CellLocation { i - 1, lastColumn - result.remainingText };
+            }
+            startPosition = lastColumn - 1;
+            --i;
+        }
+        return std::nullopt;
+    }
 };
 
 template <typename Cell>
@@ -199,7 +252,7 @@ struct LogicalLines
                 return *this;
             }
 
-            Require(!lines.get()[unbox<int>(next)].wrapped());
+            // Require(!lines.get()[unbox<int>(next)].wrapped());
 
             current.top = LineOffset::cast_from(next);
             current.lines.clear();
@@ -469,6 +522,11 @@ class Grid
                                     lines_ };
     }
 
+    LogicalLines<Cell> logicalLinesFrom(LineOffset offset)
+    {
+        return LogicalLines<Cell> { offset, boxed_cast<LineOffset>(pageSize_.lines - 1), lines_ };
+    }
+
     ReverseLogicalLines<Cell> logicalLinesReverse()
     {
         return ReverseLogicalLines<Cell> { boxed_cast<LineOffset>(-historyLineCount()),
@@ -476,6 +534,10 @@ class Grid
                                            lines_ };
     }
 
+    ReverseLogicalLines<Cell> logicalLinesReverseFrom(LineOffset offset)
+    {
+        return ReverseLogicalLines<Cell> { boxed_cast<LineOffset>(-historyLineCount()), offset, lines_ };
+    }
     // {{{ buffer manipulation
 
     /// Completely deletes all scrollback lines.
