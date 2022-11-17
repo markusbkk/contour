@@ -2387,6 +2387,7 @@ namespace impl
                 case 1048: return DECMode::SaveCursor;
                 case 1049: return DECMode::ExtendedAltScreen;
                 case 2004: return DECMode::BracketedPaste;
+                case 2022: return DECMode::MousePassiveTracking;
                 case 2026: return DECMode::BatchedRendering;
                 case 2027: return DECMode::Unicode;
                 case 2028: return DECMode::TextReflow;

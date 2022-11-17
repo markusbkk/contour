@@ -557,7 +557,7 @@ bool Terminal::sendMousePressEvent(Modifier _modifier,
         // TODO: Ctrl+(Left)Click's should still be catched by the terminal iff there's a hyperlink
         // under the current position
         flushInput();
-        return true;
+        return !isModeEnabled(DECMode::MousePassiveTracking);
     }
 
     return false;
@@ -649,7 +649,9 @@ bool Terminal::sendMouseMoveEvent(Modifier _modifier,
         && state_.inputGenerator.generateMouseMove(_modifier, currentMousePosition_, _pixelPosition))
     {
         flushInput();
-        return true;
+
+        if (!isModeEnabled(DECMode::MousePassiveTracking))
+            return true;
     }
 
     if (leftMouseButtonPressed_ && !selectionAvailable())
@@ -688,7 +690,9 @@ bool Terminal::sendMouseReleaseEvent(Modifier _modifier,
             _modifier, _button, currentMousePosition_, _pixelPosition))
     {
         flushInput();
-        return true;
+
+        if (!isModeEnabled(DECMode::MousePassiveTracking))
+            return true;
     }
     respectMouseProtocol_ = true;
 

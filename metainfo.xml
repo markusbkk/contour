@@ -110,6 +110,7 @@
           <li>Fixes country flags rendering due to misleading grapheme cluster segmentation in corner cases.</li>
           <li>Fixes cursor movements for the vi-like cursor (normal mode).</li>
           <li>Fixes normal mode's page top (S-H)/ page bottom (S-L) cursor movements to respect scroll offset.</li>
+          <li>Adds VT extension to enable passive mouse tracking via `CSI ? 2022 h` / `CSI ? 2022 l`. Passive mouse tracking enables the application to get notified on mouse events while still allowing mouse selection.</li>
         </ul>
       </description>
     </release>
